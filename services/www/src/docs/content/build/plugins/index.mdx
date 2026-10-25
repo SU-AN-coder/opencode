@@ -1310,7 +1310,7 @@ interface WebSearchEditor {
 
 ### Events
 
-Subscribe to the connected server's public event stream. Abort the stream during plugin cleanup.
+Subscribe to the connected server's public event stream. Abort the stream during plugin cleanup. Pass `types`, for example `ctx.event.subscribe({ types: ["config.updated"] })`, to receive only those event types.
 
 ```ts
 const controller = new AbortController()

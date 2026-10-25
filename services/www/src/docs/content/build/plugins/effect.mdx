@@ -1206,14 +1206,13 @@ effect: (ctx) =>
   }),
 ```
 
-Use Stream operators to select and process event types.
+Pass `types` to receive only the event types you need.
 
 ```ts
 effect: (ctx) =>
   Effect.gen(function* () {
     const event = ctx.event
-    yield* event.subscribe().pipe(
-      Stream.filter((item) => item.type === "config.updated"),
+    yield* event.subscribe({ types: ["config.updated"] }).pipe(
       Stream.runForEach(() => Effect.logInfo("configuration changed")),
       Effect.forkScoped,
     )

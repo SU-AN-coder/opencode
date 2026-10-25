@@ -1,6 +1,7 @@
 export * as SharedEvents from "./shared-events.js"
 
-export type SubscribeOptions = {
+export type SubscribeOptions<Type extends string = string> = {
+  readonly types?: ReadonlyArray<Type>
   readonly signal?: AbortSignal
   /** Reports transport activity on the shared stream, including keepalive frames that carry no event. */
   readonly onActivity?: () => void
@@ -58,7 +59,7 @@ export function make<A extends { readonly type: string }>(
   }
 
   return {
-    subscribe(options?: SubscribeOptions): AsyncIterable<A> {
+    subscribe(options?: SubscribeOptions<A["type"]>): AsyncIterable<A> {
       return {
         [Symbol.asyncIterator]() {
           const pending: ReturnType<typeof Promise.withResolvers<IteratorResult<A>>>[] = []
@@ -66,6 +67,7 @@ export function make<A extends { readonly type: string }>(
           let started = false
           let completion: Completion | undefined
           let connection: Connection | undefined
+          const types = options?.types?.length ? new Set<string>(options.types) : undefined
 
           function finish(result: Completion, discard = true) {
             completion = result
@@ -89,6 +91,7 @@ export function make<A extends { readonly type: string }>(
             },
             push(value) {
               if (completion) return
+              if (types && value.type !== "server.connected" && !types.has(value.type)) return
               const request = pending.shift()
               if (request) {
                 request.resolve({ done: false, value })

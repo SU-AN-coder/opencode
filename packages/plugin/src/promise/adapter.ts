@@ -331,7 +331,7 @@ export function fromPromise(plugin: Plugin) {
           event: {
             subscribe: (options) =>
               streams(
-                host.event.subscribe().pipe(
+                host.event.subscribe({ types: options?.types }).pipe(
                   Stream.mapEffect((event) => encodeOpenCodeEvent(event)),
                   Stream.map((event) => event as PromiseEvent),
                 ),

@@ -1,6 +1,6 @@
 export * as Bus from "./bus.js"
 
-import { Cause, Clock, Context, Effect, Layer, Option, PubSub, Schema, Stream } from "effect"
+import { Cause, Clock, Context, Effect, Layer, Option, PubSub, Queue, Schema, Stream } from "effect"
 import { Event } from "@opencode/schema/event"
 import type { EventLog } from "@opencode/schema/event-log"
 import { and, asc, eq, gt, lte, sql } from "drizzle-orm"
@@ -199,6 +199,7 @@ export function configured(options?: Options) {
           live: yield* PubSub.unbounded<Event.Payload>(),
           durable: new Map<string, Set<PubSub.PubSub<void>>>(),
           typed: new Map<string, PubSub.PubSub<Event.Payload>>(),
+          selected: new Map<string, Set<Queue.Queue<Event.Payload>>>(),
         }
         const projectors = new Map<string, Subscriber[]>()
         const listeners = new Array<Subscriber>()
@@ -283,6 +284,11 @@ export function configured(options?: Options) {
               { discard: true },
             )
             yield* Effect.forEach(pubsub.typed.values(), PubSub.shutdown, { discard: true })
+            yield* Effect.forEach(
+              pubsub.selected.values(),
+              (queues) => Effect.forEach(queues, Queue.shutdown, { discard: true }),
+              { discard: true },
+            )
           }),
         )
 
@@ -506,6 +512,8 @@ export function configured(options?: Options) {
             )
             const typed = pubsub.typed.get(event.type)
             if (typed) yield* PubSub.publish(typed, event)
+            const selected = pubsub.selected.get(event.type)
+            if (selected) yield* Effect.forEach(selected, (queue) => Queue.offer(queue, event), { discard: true })
             yield* PubSub.publish(pubsub.live, event)
           })
         }
@@ -762,7 +770,26 @@ export function configured(options?: Options) {
             return local(Stream.unwrap(getOrCreate(input).pipe(Effect.map((pubsub) => Stream.fromPubSub(pubsub)))))
           }
           const types = new Set(input.map((definition) => definition.type))
-          return streamLive().pipe(Stream.filter((event) => types.has(event.type)))
+          return local(
+            Stream.unwrap(
+              Effect.acquireRelease(
+                Queue.unbounded<Event.Payload>().pipe(
+                  Effect.tap((queue) =>
+                    Effect.sync(() => {
+                      for (const type of types) {
+                        const queues = pubsub.selected.get(type) ?? new Set()
+                        pubsub.selected.set(type, queues.add(queue))
+                      }
+                    }),
+                  ),
+                ),
+                (queue) =>
+                  Effect.sync(() => {
+                    for (const type of types) pubsub.selected.get(type)?.delete(queue)
+                  }).pipe(Effect.andThen(Queue.shutdown(queue))),
+              ).pipe(Effect.map(Stream.fromQueue)),
+            ),
+          )
         }
 
         const streamLive = (): Stream.Stream<Event.Payload> => local(Stream.fromPubSub(pubsub.live))
