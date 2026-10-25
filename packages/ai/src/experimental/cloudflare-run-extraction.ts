@@ -70,13 +70,13 @@ const decodeResponse = Effect.fn("CloudflareRunExtraction.decodeResponse")(funct
 ) {
   const output = yield* decodeEnvelope(response)
   const result = output.value.result
-  const answers = yield* Effect.forEach(Object.entries(context.request.fields), ([name, field]) =>
-    Object.hasOwn(result.answers, name)
-      ? decodeAnswer({ ...(camelKeys(result.answers[name]) as object), type: field.type }).pipe(
-          Effect.map((answer) => [name, answer] as const),
-          Effect.mapError((cause) => output.invalid(`${route.name} returned an invalid answer for ${name}`, cause)),
-        )
-      : Effect.fail(output.invalid(`${route.name} returned no answer for ${name}`)),
+  const answers = yield* Effect.forEach(
+    Object.entries(context.request.fields).filter(([name]) => Object.hasOwn(result.answers, name)),
+    ([name, field]) =>
+      decodeAnswer({ ...(camelKeys(result.answers[name]) as object), type: field.type }).pipe(
+        Effect.map((answer) => [name, answer] as const),
+        Effect.mapError((cause) => output.invalid(`${route.name} returned an invalid answer for ${name}`, cause)),
+      ),
   )
   return new ExtractionResponse({
     answers: Object.fromEntries(answers),

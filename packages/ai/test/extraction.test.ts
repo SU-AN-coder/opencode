@@ -221,6 +221,24 @@ describe("Extraction", () => {
     ),
   )
 
+  it.effect("fails when list items do not match the field's items", () =>
+    Extraction.generate({
+      model,
+      input: "Contacts: 1, 2.",
+      fields: { contacts: { type: "list", items: "text" } },
+    }).pipe(
+      Effect.flip,
+      Effect.tap((error) => Effect.sync(() => expect(error.reason._tag).toBe("InvalidProviderOutput"))),
+      Effect.provide(
+        client((input) =>
+          Effect.succeed(
+            json(input, { result: { model: "clairic", answers: { contacts: { type: "list", value: [1, 2] } } } }),
+          ),
+        ),
+      ),
+    ),
+  )
+
   it.effect("rejects an empty field map before the network", () =>
     Extraction.generate({ model, input: "x", fields: {} }).pipe(
       Effect.flip,
