@@ -1,8 +1,8 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import photon from "@silvia-odwyer/photon-node"
 import { createHash } from "node:crypto"
+import { fileURLToPath } from "node:url"
 import { Deferred, Effect, Exit, Logger, Ref } from "effect"
-import { TestClock } from "effect/testing"
 import { Photon } from "@opencode/core/image/photon"
 import { it } from "./lib/effect"
 
@@ -39,11 +39,38 @@ const digest = (result: { mime: string; content: string }) => ({
   sha256: createHash("sha256").update(result.content).digest("hex"),
 })
 
+const counted = (spawned: Ref.Ref<number>, url?: (count: number) => URL | undefined) =>
+  Ref.getAndUpdate(spawned, (count) => count + 1).pipe(Effect.flatMap((count) => Photon.spawnWorker(url?.(count))))
+
+// Runs the fixture in its own process and returns how long the process took to
+// exit after its work was done.
+const exitLag = async (mode: string) => {
+  const child = Bun.spawn(
+    [process.execPath, fileURLToPath(new URL("./fixture/photon-exit.ts", import.meta.url)), mode],
+    {
+      stdout: "pipe",
+      stderr: "inherit",
+    },
+  )
+  const timeout = setTimeout(() => child.kill(), 20_000)
+  const output = await new Response(child.stdout).text()
+  const code = await child.exited
+  clearTimeout(timeout)
+  expect(code).toBe(0)
+  return Date.now() - Number(output.trim())
+}
+
 describe("Image.Photon", () => {
   it.live("resizes in a worker to the same bytes as before", () =>
     Effect.gen(function* () {
-      const normalize = yield* Photon.make
+      const normalize = Photon.makeWith(Photon.spawnWorker())
       expect(digest(yield* normalize("fixture.png", content, limits))).toEqual(expected)
+    }),
+  )
+
+  it.live("shares one resizer across the process", () =>
+    Effect.gen(function* () {
+      expect(yield* Photon.make).toBe(yield* Photon.make)
     }),
   )
 
@@ -53,22 +80,18 @@ describe("Image.Photon", () => {
       if (logLevel === "Warn") warnings.push(message)
     })
     return Effect.gen(function* () {
-      const normalize = yield* Photon.makeWith(
-        Photon.spawnWorker(new URL("./missing-photon-worker.js", import.meta.url)),
-      )
+      const normalize = Photon.makeWith(Photon.spawnWorker(new URL("./missing-photon-worker.js", import.meta.url)))
       expect(digest(yield* normalize("fixture.png", content, limits))).toEqual(expected)
       expect(digest(yield* normalize("fixture.png", content, limits))).toEqual(expected)
       expect(warnings).toHaveLength(1)
     }).pipe(Effect.provide(Logger.layer([logger])))
   })
 
-  it.live("runs concurrent calls on one worker", () =>
+  it.live("queues concurrent calls on one worker", () =>
     Effect.gen(function* () {
       const spawned = yield* Ref.make(0)
-      const normalize = yield* Photon.makeWith(
-        Photon.spawnWorker().pipe(Effect.tap(() => Ref.update(spawned, (count) => count + 1))),
-      )
-      const reference = yield* Photon.makeWith(Photon.spawnWorker(new URL("./missing.js", import.meta.url)))
+      const normalize = Photon.makeWith(counted(spawned))
+      const reference = Photon.makeWith(Photon.spawnWorker(new URL("./missing.js", import.meta.url)))
       const sizes = [400, 300, 200].map((maxWidth) => ({ ...limits, maxWidth, maxHeight: maxWidth }))
       const results = yield* Effect.forEach(sizes, (size) => normalize("fixture.png", content, size), {
         concurrency: "unbounded",
@@ -80,38 +103,36 @@ describe("Image.Photon", () => {
     }),
   )
 
-  it.live("fails every in-flight call when the worker crashes, then spawns a fresh one", () =>
+  it.live("fails only the request a crash interrupts, then runs the queue on a fresh worker", () =>
     Effect.gen(function* () {
       const spawned = yield* Ref.make(0)
-      const normalize = yield* Photon.makeWith(
-        Ref.getAndUpdate(spawned, (count) => count + 1).pipe(
-          Effect.flatMap((count) =>
-            Photon.spawnWorker(count === 0 ? new URL("./fixture/photon-crash-worker.ts", import.meta.url) : undefined),
-          ),
+      const normalize = Photon.makeWith(
+        counted(spawned, (count) =>
+          count === 0 ? new URL("./fixture/photon-crash-worker.ts", import.meta.url) : undefined,
         ),
       )
-      const exits = yield* Effect.forEach([0, 1], () => normalize("fixture.png", content, limits).pipe(Effect.exit), {
-        concurrency: "unbounded",
-      })
-      expect(exits.every(Exit.hasDies)).toBe(true)
-
-      expect(digest(yield* normalize("fixture.png", content, limits))).toEqual(expected)
+      const exits = yield* Effect.forEach(
+        [0, 1, 2],
+        () => normalize("fixture.png", content, limits).pipe(Effect.exit),
+        { concurrency: "unbounded" },
+      )
+      expect(Exit.hasDies(exits[0]!)).toBe(true)
+      for (const exit of exits.slice(1)) expect(Exit.isSuccess(exit) && digest(exit.value)).toEqual(expected)
       expect(yield* Ref.get(spawned)).toBe(2)
     }),
   )
 
-  it.effect("terminates the worker once it has been idle", () =>
+  it.live("terminates the worker once it has been idle", () =>
     Effect.gen(function* () {
       const spawned = yield* Ref.make(0)
       const exited = yield* Deferred.make<void>()
-      const normalize = yield* Photon.makeWith(
-        Photon.spawnWorker().pipe(
+      const normalize = Photon.makeWith(
+        counted(spawned).pipe(
           Effect.tap((worker) =>
-            Ref.update(spawned, (count) => count + 1).pipe(
-              Effect.andThen(Effect.sync(() => worker.once("exit", () => Deferred.doneUnsafe(exited, Effect.void)))),
-            ),
+            Effect.sync(() => worker.once("exit", () => Deferred.doneUnsafe(exited, Effect.void))),
           ),
         ),
+        200,
       )
       const small = { ...limits, maxWidth: 200, maxHeight: 200 }
       yield* normalize("fixture.png", content, small)
@@ -119,11 +140,18 @@ describe("Image.Photon", () => {
       expect(yield* Ref.get(spawned)).toBe(1)
       expect(yield* Deferred.isDone(exited)).toBe(false)
 
-      yield* TestClock.adjust("10 seconds")
       yield* Deferred.await(exited)
 
       yield* normalize("fixture.png", content, small)
       expect(yield* Ref.get(spawned)).toBe(2)
     }),
   )
+
+  test("an idle worker does not keep the process alive", async () => {
+    expect(await exitLag("resize")).toBeLessThan(3_000)
+  }, 30_000)
+
+  test("terminates a worker whose startup is interrupted", async () => {
+    expect(await exitLag("abandon-spawn")).toBeLessThan(3_000)
+  }, 30_000)
 })
