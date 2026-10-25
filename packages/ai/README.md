@@ -224,9 +224,10 @@ DigitalOcean use System One (`/systemone`), and Cloudflare sends the System One 
 
 ### Extraction (experimental)
 
-Extraction models read typed values out of text instead of answering questions with probabilities. Each field is a
-`text`, `number`, `date`, `time`, `datetime`, `duration`, `list`, `estimate` or `forecast`, and its answer is typed to
-match. Only Cloudflare's Clairic serves it today, so it lives under `@opencode/ai/experimental`.
+Extraction models read typed values out of text instead of answering questions with probabilities. A field of type
+`text`, `number`, `date`, `time`, `datetime`, `duration`, `list`, `estimate` or `forecast` gets an answer typed to
+match; other types are sent and answered as-is. Only Cloudflare's Clairic serves it today, so it lives under
+`@opencode/ai/experimental`.
 
 ```ts
 import { ai } from "@opencode/ai"
@@ -249,8 +250,9 @@ response.answers.total.value // 1080, or null when the input does not say
 ```
 
 Value answers carry `guess`, `nullProbability` and `confidence`; text answers carry a `span` into `input`. Estimates and
-forecasts return `median`, `p10` and `p90`. Effect users call `Extraction.generate` with `ExtractionClient.fetchLayer`
-(or `AIClient.layer`). Images are not supported yet.
+forecasts return `median`, `p10` and `p90`. Field options other than `type`, `instructions` and `nullThreshold` go to
+Clairic as written. Effect users provide `RequestExecutor.fetchLayer` (or `AIClient.layer`). Images are not supported
+yet.
 
 ## Alibaba Cloud Model Studio
 

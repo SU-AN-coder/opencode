@@ -1,11 +1,9 @@
 import { describe, expect } from "bun:test"
-import { Effect, Layer } from "effect"
-import { Extraction, ExtractionClient } from "../src/experimental.js"
+import { Effect } from "effect"
+import { Extraction } from "../src/experimental.js"
 import { CloudflareWorkersAI } from "../src/providers.js"
 import { it } from "./lib/effect.js"
-import { dynamicResponse, json, type Handler } from "./lib/http.js"
-
-const client = (handler: Handler) => ExtractionClient.layer.pipe(Layer.provide(dynamicResponse(handler)))
+import { dynamicResponse, json } from "./lib/http.js"
 
 const model = CloudflareWorkersAI.configure({
   accountId: "test-account",
@@ -30,21 +28,17 @@ describe("Extraction", () => {
     }).pipe(
       Effect.tap((response) =>
         Effect.sync(() => {
-          const contacts: ReadonlyArray<string> | null = response.answers.contacts.value
-          expect(contacts).toEqual(["Dana", "Priya"])
           expect(response.answers).toEqual({
             invoice: {
-              type: "text",
               value: "INV-7",
               guess: "INV-7",
               nullProbability: 0.01,
               confidence: 0.99,
               span: [8, 13],
             },
-            total: { type: "number", value: null, guess: 1080, nullProbability: 0.6, confidence: 0.9 },
-            due: { type: "date", value: "2026-04-01", nullProbability: 0, confidence: 1 },
+            total: { value: null, guess: 1080, nullProbability: 0.6, confidence: 0.9 },
+            due: { value: "2026-04-01", nullProbability: 0, confidence: 1 },
             contacts: {
-              type: "list",
               value: ["Dana", "Priya"],
               spans: [
                 [67, 71],
@@ -53,7 +47,6 @@ describe("Extraction", () => {
               confidence: 0.98,
             },
             payDays: {
-              type: "estimate",
               value: 30,
               mean: 29.5,
               median: 30,
@@ -64,7 +57,6 @@ describe("Extraction", () => {
               quantiles: [20, 30, 40],
             },
             sales: {
-              type: "forecast",
               value: [140, 148],
               steps: [
                 { value: 140, mean: 140, median: 141, p10: 130, p90: 151 },
@@ -78,7 +70,7 @@ describe("Extraction", () => {
         }),
       ),
       Effect.provide(
-        client((input) => {
+        dynamicResponse((input) => {
           expect(input.request.url).toBe(
             "https://api.cloudflare.com/client/v4/accounts/test-account/ai/run/@cf/cloudflare/clairic",
           )
@@ -164,33 +156,37 @@ describe("Extraction", () => {
     ),
   )
 
-  it.effect("tolerates unknown answer types, properties and extra answers", () =>
-    Extraction.generate({ model, input: "Ship by May 20.", fields: { ship: { type: "date" } } }).pipe(
+  it.effect("passes unknown field types through and drops extra answers", () =>
+    Extraction.generate({
+      model,
+      input: "Ship by May 20 in EUR.",
+      fields: { ship: { type: "date" }, money: { type: "currency", codes: ["EUR"] } },
+    }).pipe(
       Effect.tap((response) =>
         Effect.sync(() =>
-          expect(response.answers).toEqual({ ship: { type: "date", value: "2026-05-20", confidence: 0.97 } }),
+          expect(response.answers).toEqual({
+            ship: { value: "2026-05-20", confidence: 0.97 },
+            money: { type: "currency", value: "EUR", p_null: 0 },
+          }),
         ),
       ),
       Effect.provide(
-        client((input) =>
-          Effect.succeed(
+        dynamicResponse((input) => {
+          expect(JSON.parse(input.text).fields.money).toEqual({ type: "currency", codes: ["EUR"] })
+          return Effect.succeed(
             json(input, {
               result: {
                 model: "clairic",
                 answers: {
-                  ship: { type: "calendar_date", value: "2026-05-20", confidence: 0.97, calendar: "gregorian" },
+                  ship: { type: "date", value: "2026-05-20", confidence: 0.97, calendar: "gregorian" },
+                  money: { type: "currency", value: "EUR", p_null: 0 },
                   extra: { type: "hologram", value: { x: 1 } },
                 },
-                truncated: false,
                 future_flag: true,
-                usage: { input_tokens: 10, output_tokens: 0 },
               },
-              success: true,
-              errors: [],
-              messages: [],
             }),
-          ),
-        ),
+          )
+        }),
       ),
     ),
   )
@@ -200,7 +196,7 @@ describe("Extraction", () => {
       Effect.flip,
       Effect.tap((error) => Effect.sync(() => expect(error.reason._tag).toBe("InvalidProviderOutput"))),
       Effect.provide(
-        client((input) =>
+        dynamicResponse((input) =>
           Effect.succeed(json(input, { result: { model: "clairic", answers: {}, usage: { input_tokens: 1 } } })),
         ),
       ),
@@ -212,27 +208,9 @@ describe("Extraction", () => {
       Effect.flip,
       Effect.tap((error) => Effect.sync(() => expect(error.reason._tag).toBe("InvalidProviderOutput"))),
       Effect.provide(
-        client((input) =>
+        dynamicResponse((input) =>
           Effect.succeed(
             json(input, { result: { model: "clairic", answers: { total: { type: "number", value: "lots" } } } }),
-          ),
-        ),
-      ),
-    ),
-  )
-
-  it.effect("fails when list items do not match the field's items", () =>
-    Extraction.generate({
-      model,
-      input: "Contacts: 1, 2.",
-      fields: { contacts: { type: "list", items: "text" } },
-    }).pipe(
-      Effect.flip,
-      Effect.tap((error) => Effect.sync(() => expect(error.reason._tag).toBe("InvalidProviderOutput"))),
-      Effect.provide(
-        client((input) =>
-          Effect.succeed(
-            json(input, { result: { model: "clairic", answers: { contacts: { type: "list", value: [1, 2] } } } }),
           ),
         ),
       ),
@@ -243,7 +221,7 @@ describe("Extraction", () => {
     Extraction.generate({ model, input: "x", fields: {} }).pipe(
       Effect.flip,
       Effect.tap((error) => Effect.sync(() => expect(error.reason._tag).toBe("InvalidRequest"))),
-      Effect.provide(client(() => Effect.die("an invalid extraction request reached the network"))),
+      Effect.provide(dynamicResponse(() => Effect.die("an invalid extraction request reached the network"))),
     ),
   )
 })

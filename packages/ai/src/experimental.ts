@@ -1,16 +1,8 @@
-export { ExtractionClient } from "./experimental/extraction-client.js"
-export {
-  Extraction,
-  ExtractionAnswer,
-  ExtractionField,
-  ExtractionModel,
-  ExtractionModelSchema,
-  ExtractionRequest,
-  ExtractionResponse,
-} from "./experimental/extraction.js"
+export { Extraction, ExtractionModel, ExtractionRequest, ExtractionResponse } from "./experimental/extraction.js"
 export type {
   ExtractionAnswerFor,
   ExtractionAnswersFor,
+  ExtractionField,
   ExtractionFields,
   ExtractionModelOptions,
   ExtractionOptions,
