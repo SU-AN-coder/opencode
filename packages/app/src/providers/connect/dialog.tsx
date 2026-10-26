@@ -24,6 +24,7 @@ import {
 } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useParams } from "@solidjs/router"
+import { connectedToast } from "./connected-toast"
 import { useLanguage } from "@/runtime/i18n/language"
 import { usePlatform } from "@/runtime/platform/platform"
 import { useServerSDK } from "@/runtime/server/client"
@@ -517,8 +518,7 @@ function ProviderConnection(props: {
       showToast({
         variant: "success",
         icon: "circle-check",
-        title: language.t("provider.connect.toast.connected.title", { provider: provider().name }),
-        description: language.t("provider.connect.toast.connected.description", { provider: provider().name }),
+        ...connectedToast({ provider: provider().name, models: connectionModels().length, translate: language.t }),
       })
     },
   })
