@@ -55,3 +55,23 @@ describe("pairing link", () => {
     expect(legacyPairingLink("http://192.168.1.2:49374/auth/connect/abc")).toBe(false)
   })
 })
+
+// iOS 17 has no URL.parse (#59186): the connect screen threw before it sent anything.
+describe("pairing link on a browser without URL.parse", () => {
+  test("reads the same links as a browser that has it", () => {
+    const saved = URL.parse
+    // @ts-expect-error the point of the test: Safari before 18 has no URL.parse
+    URL.parse = undefined
+
+    try {
+      expect(pairingLink(" http://192.168.1.2:49374/auth/connect/abc_DEF-123 ")).toEqual({
+        urls: ["http://192.168.1.2:49374"],
+        code: "abc_DEF-123",
+      })
+      expect(legacyPairingLink("http://192.168.1.2:49374/connect#token")).toBe(true)
+      expect(legacyPairingLink("http://192.168.1.2:49374/pages")).toBe(false)
+    } finally {
+      URL.parse = saved
+    }
+  })
+})
