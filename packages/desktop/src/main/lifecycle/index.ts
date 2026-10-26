@@ -34,7 +34,16 @@ const runtime = Layer.effect(
     const restoreWindows = windows.restore
     const pendingDeepLinks: string[] = []
     let shutdownReady = false
-    const prepareToRestart = shutdown.run.pipe(Effect.ensuring(Effect.sync(() => (shutdownReady = true))))
+    let quitRequested = false
+
+    // A hung shutdown step would otherwise leave every quit waiting on it forever.
+    const prepareToRestart = shutdown.run.pipe(
+      Effect.timeoutOrElse({
+        duration: "10 seconds",
+        orElse: () => Effect.logError("shutdown timed out, quitting anyway"),
+      }),
+      Effect.ensuring(Effect.sync(() => (shutdownReady = true))),
+    )
 
     const focusWindow = (win: BrowserWindow | null) => {
       if (!win) return
@@ -94,11 +103,15 @@ const runtime = Layer.effect(
     }
 
     const beforeQuit = (event: Event) => {
+      quitRequested = true
       setAppQuitting()
 
       if (shutdownReady) return
       event.preventDefault()
-      runFork(prepareToRestart.pipe(Effect.ensuring(Effect.sync(() => app.quit()))))
+      // Electron records the cancelled quit only after this event returns. A shutdown with nothing to
+      // stop finishes in a microtask, so re-quitting from it would be overwritten and the app would
+      // stay alive with no windows. Re-quit on the next tick instead.
+      runFork(prepareToRestart.pipe(Effect.ensuring(Effect.sync(() => setImmediate(() => app.quit())))))
     }
 
     const willQuit = () => {
@@ -125,11 +138,14 @@ const runtime = Layer.effect(
       runFork(prepareToRestart.pipe(Effect.ensuring(Effect.sync(() => app.quit()))))
     }
 
+    // Electron emits this instead of will-quit when it lost track of a quit, so finish the one we asked for.
     const windowAllClosed = () => {
-      if (process.platform !== "darwin") app.quit()
+      if (quitRequested || process.platform !== "darwin") app.quit()
     }
 
     const activate = () => {
+      if (quitRequested) return
+
       if (BrowserWindow.getAllWindows().length === 0) restoreWindows()
     }
 
