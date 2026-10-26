@@ -79,34 +79,27 @@ export function makeWith(spawn: Effect.Effect<Worker, WorkerUnavailableError>, i
     if (current === worker) current = undefined
     void worker.terminate()
   }
-  // Uninterruptible after spawn resolves, so a ready worker is never dropped
-  // without being tracked (and later terminated).
-  const acquire = Effect.uninterruptibleMask((restore) =>
-    current
-      ? Effect.succeed(current)
-      : restore(spawn).pipe(
-          Effect.tap((worker) =>
-            Effect.sync(() => {
-              current = worker
-              worker.unref()
-              // A worker that dies while idle is replaced by the next call.
-              const forget = () => {
-                if (current === worker) current = undefined
-              }
-              worker.on("error", forget).once("exit", forget)
-            }),
-          ),
-        ),
-  )
+  const track = (worker: Worker) =>
+    Effect.sync(() => {
+      current = worker
+      worker.unref()
+      // A worker that dies while idle is replaced by the next call.
+      const forget = () => {
+        if (current === worker) current = undefined
+      }
+      worker.on("error", forget).once("exit", forget)
+      return worker
+    })
+  // Interruptible only while spawning and while the request runs, so from the
+  // moment a worker exists it is either tracked with an idle timer or discarded.
   // A failed or interrupted request takes its worker down: the heap may be
   // poisoned, or the worker is still busy with a reply nobody will read.
   const inWorker = (content: PhotonNormalize.Content, limits: Readonly<Limits>) =>
-    Effect.suspend(() => {
-      clearTimeout(idle)
-      return acquire
-    }).pipe(
-      Effect.flatMap((worker) =>
-        request(worker, content, limits).pipe(
+    Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        clearTimeout(idle)
+        const worker = current ?? (yield* restore(spawn).pipe(Effect.flatMap(track)))
+        return yield* restore(request(worker, content, limits)).pipe(
           Effect.onExit((exit) =>
             Effect.sync(() => {
               if (Exit.isFailure(exit)) return discard(worker)
@@ -115,10 +108,9 @@ export function makeWith(spawn: Effect.Effect<Worker, WorkerUnavailableError>, i
               idle.unref()
             }),
           ),
-        ),
-      ),
-      permit.withPermits(1),
-    )
+        )
+      }),
+    ).pipe(permit.withPermits(1))
   const inProcess = (content: PhotonNormalize.Content, limits: Readonly<Limits>) =>
     Effect.tryPromise({
       try: () => (photon ??= PhotonNormalize.load()),

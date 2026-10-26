@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import photon from "@silvia-odwyer/photon-node"
 import { createHash } from "node:crypto"
 import { fileURLToPath } from "node:url"
-import { Deferred, Effect, Exit, Logger, Ref } from "effect"
+import { Deferred, Effect, Exit, Fiber, Logger, Ref } from "effect"
 import { Photon } from "@opencode/core/image/photon"
 import { it } from "./lib/effect"
 
@@ -119,6 +119,33 @@ describe("Image.Photon", () => {
       expect(Exit.hasDies(exits[0]!)).toBe(true)
       for (const exit of exits.slice(1)) expect(Exit.isSuccess(exit) && digest(exit.value)).toEqual(expected)
       expect(yield* Ref.get(spawned)).toBe(2)
+    }),
+  )
+
+  it.live("terminates a worker when interrupted between acquiring it and sending the request", () =>
+    Effect.gen(function* () {
+      const exited = yield* Deferred.make<void>()
+      // Interrupts the caller as the new worker is stored, the last step before the request.
+      const normalize = Photon.makeWith(
+        Effect.withFiber((caller) =>
+          Photon.spawnWorker().pipe(
+            Effect.tap((worker) =>
+              Effect.sync(() => {
+                worker.once("exit", () => Deferred.doneUnsafe(exited, Effect.void))
+                const unref = worker.unref.bind(worker)
+                worker.unref = () => {
+                  worker.unref = unref
+                  unref()
+                  caller.interruptUnsafe()
+                }
+              }),
+            ),
+          ),
+        ),
+      )
+      const call = yield* Effect.forkChild(normalize("fixture.png", content, limits))
+      expect(Exit.hasInterrupts(yield* Fiber.await(call))).toBe(true)
+      yield* Deferred.await(exited).pipe(Effect.timeout("3 seconds"))
     }),
   )
 
