@@ -56,14 +56,16 @@ describe("pairing link", () => {
   })
 })
 
-// iOS 17 has no URL.parse (#59186): the connect screen threw before it sent anything.
+// iOS 17 has no URL.parse (#59186): the polyfill stands in for it and the connect screen reads links again.
 describe("pairing link on a browser without URL.parse", () => {
-  test("reads the same links as a browser that has it", () => {
+  test("reads the same links once the polyfill has run", async () => {
     const saved = URL.parse
     // @ts-expect-error the point of the test: Safari before 18 has no URL.parse
     URL.parse = undefined
 
     try {
+      await import("../../runtime/polyfills")
+
       expect(pairingLink(" http://192.168.1.2:49374/auth/connect/abc_DEF-123 ")).toEqual({
         urls: ["http://192.168.1.2:49374"],
         code: "abc_DEF-123",

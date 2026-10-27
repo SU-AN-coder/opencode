@@ -19,16 +19,6 @@ export function serverAddress(value: string) {
 
 const CODE = /^[A-Za-z0-9_-]+$/
 
-// URL.parse is Safari 18+; on iOS 17 it is undefined, so reading a pairing link threw a TypeError before any
-// request went out and the connect screen blamed the address (#59186). new URL in a try/catch is the same test.
-const parseUrl = (value: string) => {
-  try {
-    return new URL(value)
-  } catch {
-    return undefined
-  }
-}
-
 const decodePayload = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ code: Schema.String, urls: Schema.Array(Schema.String) })),
 )
@@ -49,7 +39,7 @@ export function pairingLink(value: string) {
     return { urls: urls.filter((url) => url !== undefined), code: payload.code }
   }
 
-  const url = parseUrl(trimmed)
+  const url = URL.parse(trimmed)
 
   if (!url || (url.protocol !== "http:" && url.protocol !== "https:")) return
   const code = /^\/auth\/connect\/([^/]+)$/.exec(url.pathname)?.[1]
@@ -77,7 +67,7 @@ export function bareServerAddress(value: string) {
 
 // Servers before one-time links paired with `/connect#<credentials>` or `/connect?data=<credentials>`.
 export function legacyPairingLink(value: string) {
-  const url = parseUrl(value.trim())
+  const url = URL.parse(value.trim())
 
   if (!url || (url.protocol !== "http:" && url.protocol !== "https:")) return false
 
